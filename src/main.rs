@@ -18,7 +18,7 @@ const BROADCAST_CAPACITY: usize = 16_384;
 #[tokio::main]
 async fn main() -> Result<()> {
     let client = reqwest::Client::builder()
-        .user_agent("polymarket-btc-updown/0.1")
+        .user_agent("latency/0.1")
         .build()
         .context("failed to build http client")?;
 

@@ -1,5 +1,5 @@
 [package]
-name = "polymarket-btc-updown"
+name = "latency"
 version = "0.1.0"
 edition = "2021"
 
