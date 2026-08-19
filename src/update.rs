@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::gamma::{Timeframe, UpMarket};
+use crate::gamma::{Timeframe, UpMarket, SUBSCRIBE_LEAD_SECS};
 use crate::orderbook::TopOfBook;
 
 #[derive(Debug, Clone, Serialize)]
@@ -96,7 +96,7 @@ pub fn next_rotation_delay(markets: &[UpMarket]) -> std::time::Duration {
     use std::time::Duration;
 
     let now = Utc::now();
-    let mut next = now + ChronoDuration::seconds(1);
+    let mut next = now + ChronoDuration::hours(24);
 
     for market in markets {
         if let Some(end) = market.end_time {
@@ -104,12 +104,22 @@ pub fn next_rotation_delay(markets: &[UpMarket]) -> std::time::Duration {
                 next = end;
             }
         }
+        if let Some(start) = market.start_time {
+            let subscribe_at = start - ChronoDuration::seconds(SUBSCRIBE_LEAD_SECS);
+            if subscribe_at > now && subscribe_at < next {
+                next = subscribe_at;
+            }
+        }
     }
 
     for timeframe in [Timeframe::FiveMin, Timeframe::FifteenMin, Timeframe::OneHour] {
-        let start = timeframe.next_window_start(now);
-        if start > now && start < next {
-            next = start;
+        let window_start = timeframe.next_window_start(now);
+        let subscribe_at = window_start - ChronoDuration::seconds(SUBSCRIBE_LEAD_SECS);
+        if subscribe_at > now && subscribe_at < next {
+            next = subscribe_at;
+        }
+        if window_start > now && window_start < next {
+            next = window_start;
         }
     }
 

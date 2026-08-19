@@ -47,12 +47,12 @@ async fn run_market_rotation(
     let mut current = Vec::new();
 
     loop {
-        match gamma::fetch_current_up_markets(&client).await {
+        match gamma::fetch_subscribable_up_markets(&client).await {
             Ok(markets) => {
                 if markets_changed(&current, &markets) {
                     current = markets;
                     eprintln!(
-                        "markets rotated: {} active up market(s)",
+                        "markets rotated: {} subscribable up market(s)",
                         current.len()
                     );
                     for market in &current {
@@ -73,6 +73,11 @@ async fn run_market_rotation(
             }
         }
 
-        sleep(next_rotation_delay(&current)).await;
+        let delay = if current.is_empty() {
+            Duration::from_secs(5)
+        } else {
+            next_rotation_delay(&current)
+        };
+        sleep(delay).await;
     }
 }

@@ -5,6 +5,7 @@ use serde::Deserialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const GAMMA_BASE: &str = "https://gamma-api.polymarket.com";
+pub const SUBSCRIBE_LEAD_SECS: i64 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Timeframe {
@@ -80,11 +81,11 @@ struct GammaMarket {
     end_date: Option<String>,
 }
 
-pub async fn fetch_current_up_markets(client: &reqwest::Client) -> Result<Vec<UpMarket>> {
+pub async fn fetch_subscribable_up_markets(client: &reqwest::Client) -> Result<Vec<UpMarket>> {
     let mut markets = Vec::new();
 
     for timeframe in [Timeframe::FiveMin, Timeframe::FifteenMin, Timeframe::OneHour] {
-        if let Some(market) = fetch_current_for_timeframe(client, timeframe).await? {
+        if let Some(market) = fetch_subscribable_for_timeframe(client, timeframe).await? {
             markets.push(market);
         }
     }
@@ -92,7 +93,7 @@ pub async fn fetch_current_up_markets(client: &reqwest::Client) -> Result<Vec<Up
     Ok(markets)
 }
 
-async fn fetch_current_for_timeframe(
+async fn fetch_subscribable_for_timeframe(
     client: &reqwest::Client,
     timeframe: Timeframe,
 ) -> Result<Option<UpMarket>> {
@@ -134,7 +135,7 @@ async fn fetch_from_series(
     Ok(events
         .into_iter()
         .flat_map(|event| parse_event(event, timeframe))
-        .filter(|market| is_current_market(market, now))
+        .filter(|market| is_subscribable_market(market, now))
         .min_by_key(|market| market.start_time))
 }
 
@@ -159,13 +160,21 @@ async fn fetch_by_slug(
     Ok(events
         .into_iter()
         .flat_map(|event| parse_event(event, timeframe))
-        .find(|market| is_current_market(market, now)))
+        .find(|market| is_subscribable_market(market, now)))
 }
 
-fn is_current_market(market: &UpMarket, now: DateTime<Utc>) -> bool {
+fn is_subscribable_market(market: &UpMarket, now: DateTime<Utc>) -> bool {
     match (market.start_time, market.end_time) {
-        (Some(start), Some(end)) => now >= start && now < end,
-        (Some(start), None) => now >= start,
+        (Some(start), Some(end)) => {
+            let subscribe_from =
+                start - chrono::Duration::seconds(SUBSCRIBE_LEAD_SECS);
+            now >= subscribe_from && now < end
+        }
+        (Some(start), None) => {
+            let subscribe_from =
+                start - chrono::Duration::seconds(SUBSCRIBE_LEAD_SECS);
+            now >= subscribe_from
+        }
         _ => true,
     }
 }
@@ -203,26 +212,35 @@ fn parse_time(raw: Option<&str>) -> Option<DateTime<Utc>> {
 
 fn slug_candidates(timeframe: Timeframe) -> Vec<String> {
     match timeframe {
-        Timeframe::FiveMin => vec![timestamp_slug("btc-updown-5m", 300)],
-        Timeframe::FifteenMin => vec![timestamp_slug("btc-updown-15m", 900)],
+        Timeframe::FiveMin => vec![
+            timestamp_slug("btc-updown-5m", 300, 0),
+            timestamp_slug("btc-updown-5m", 300, 1),
+        ],
+        Timeframe::FifteenMin => vec![
+            timestamp_slug("btc-updown-15m", 900, 0),
+            timestamp_slug("btc-updown-15m", 900, 1),
+        ],
         Timeframe::OneHour => hourly_slug_candidates(),
     }
 }
 
-fn timestamp_slug(prefix: &str, window_secs: i64) -> String {
+fn timestamp_slug(prefix: &str, window_secs: i64, windows_ahead: i64) -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time before unix epoch")
         .as_secs() as i64;
-    let start = (now / window_secs) * window_secs;
+    let start = ((now / window_secs) + windows_ahead) * window_secs;
     format!("{prefix}-{start}")
 }
 
 fn hourly_slug_candidates() -> Vec<String> {
     let now = Utc::now().with_timezone(&New_York);
+    let next = now + chrono::Duration::hours(1);
     vec![
         format_hourly_slug(&now, true),
         format_hourly_slug(&now, false),
+        format_hourly_slug(&next, true),
+        format_hourly_slug(&next, false),
     ]
 }
 
