@@ -11,6 +11,7 @@ pub const SUBSCRIBE_LEAD_SECS: i64 = 60;
 pub enum Timeframe {
     FiveMin,
     FifteenMin,
+    #[allow(dead_code)]
     OneHour,
 }
 
@@ -84,7 +85,7 @@ struct GammaMarket {
 pub async fn fetch_subscribable_up_markets(client: &reqwest::Client) -> Result<Vec<UpMarket>> {
     let mut markets = Vec::new();
 
-    for timeframe in [Timeframe::FiveMin, Timeframe::FifteenMin, Timeframe::OneHour] {
+    for timeframe in [Timeframe::FiveMin, Timeframe::FifteenMin] {
         if let Some(market) = fetch_subscribable_for_timeframe(client, timeframe).await? {
             markets.push(market);
         }

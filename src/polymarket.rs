@@ -1,7 +1,7 @@
-use crate::gamma::UpMarket;
+use crate::gamma::{Timeframe, UpMarket};
 use crate::orderbook::{OrderBook, TopOfBook};
 use crate::reconnect::Backoff;
-use crate::update::{ClientMessage, MarketUpdate};
+use crate::update::{market_is_live, ClientMessage, SharedQuotes};
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -54,6 +54,7 @@ impl FeedState {
 pub async fn run_polymarket_feed(
     mut market_rx: watch::Receiver<Vec<UpMarket>>,
     broadcast_tx: broadcast::Sender<ClientMessage>,
+    quotes: SharedQuotes,
 ) -> Result<()> {
     let mut backoff = Backoff::new();
 
@@ -69,7 +70,7 @@ pub async fn run_polymarket_feed(
         let markets = market_rx.borrow_and_update().clone();
         log_subscription("connecting with", &markets);
 
-        match run_connection(&mut market_rx, &markets, &broadcast_tx).await {
+        match run_connection(&mut market_rx, &markets, &broadcast_tx, &quotes).await {
             Ok(()) => {
                 backoff.reset();
             }
@@ -89,6 +90,7 @@ async fn run_connection(
     market_rx: &mut watch::Receiver<Vec<UpMarket>>,
     initial_markets: &[UpMarket],
     broadcast_tx: &broadcast::Sender<ClientMessage>,
+    quotes: &SharedQuotes,
 ) -> Result<()> {
     let (ws, _) = connect_async(WS_URL)
         .await
@@ -154,9 +156,16 @@ async fn run_connection(
 
     let state_for_processor = state.clone();
     let broadcast_for_processor = broadcast_tx.clone();
+    let quotes_for_processor = quotes.clone();
     let dead_for_processor = dead_tx.clone();
     let processor = tokio::spawn(async move {
-        process_messages(text_rx, state_for_processor, broadcast_for_processor).await;
+        process_messages(
+            text_rx,
+            state_for_processor,
+            broadcast_for_processor,
+            quotes_for_processor,
+        )
+        .await;
         let _ = dead_for_processor.send("processor").await;
     });
 
@@ -233,9 +242,10 @@ async fn process_messages(
     mut text_rx: mpsc::Receiver<String>,
     state: Arc<RwLock<FeedState>>,
     broadcast_tx: broadcast::Sender<ClientMessage>,
+    quotes: SharedQuotes,
 ) {
     while let Some(text) = text_rx.recv().await {
-        handle_text(&text, &state, &broadcast_tx).await;
+        handle_text(&text, &state, &broadcast_tx, &quotes).await;
     }
 }
 
@@ -243,6 +253,7 @@ async fn handle_text(
     text: &str,
     state: &Arc<RwLock<FeedState>>,
     broadcast_tx: &broadcast::Sender<ClientMessage>,
+    quotes: &SharedQuotes,
 ) {
     let Ok(value) = serde_json::from_str::<Value>(text) else {
         return;
@@ -251,10 +262,10 @@ async fn handle_text(
     match value {
         Value::Array(items) => {
             for item in items {
-                handle_event(&item, state, broadcast_tx).await;
+                handle_event(&item, state, broadcast_tx, quotes).await;
             }
         }
-        Value::Object(_) => handle_event(&value, state, broadcast_tx).await,
+        Value::Object(_) => handle_event(&value, state, broadcast_tx, quotes).await,
         _ => {}
     }
 }
@@ -263,6 +274,7 @@ async fn handle_event(
     value: &Value,
     state: &Arc<RwLock<FeedState>>,
     broadcast_tx: &broadcast::Sender<ClientMessage>,
+    quotes: &SharedQuotes,
 ) {
     let Some(event_type) = value.get("event_type").and_then(Value::as_str) else {
         return;
@@ -289,7 +301,7 @@ async fn handle_event(
                         .collect::<Vec<_>>(),
                 );
                 let top = book.top_of_book();
-                maybe_broadcast(&market, top, &mut guard.tops, broadcast_tx);
+                maybe_broadcast(&market, top, &mut guard.tops, broadcast_tx, quotes);
             }
         }
         "price_change" => {
@@ -307,7 +319,7 @@ async fn handle_event(
                         change.best_ask.as_deref(),
                     );
                     let top = book.top_of_book();
-                    maybe_broadcast(&market, top, &mut guard.tops, broadcast_tx);
+                    maybe_broadcast(&market, top, &mut guard.tops, broadcast_tx, quotes);
                 }
             }
         }
@@ -320,12 +332,24 @@ fn maybe_broadcast(
     top: TopOfBook,
     tops: &mut HashMap<String, TopOfBook>,
     broadcast_tx: &broadcast::Sender<ClientMessage>,
+    quotes: &SharedQuotes,
 ) {
+    if !matches!(market.timeframe, Timeframe::FiveMin | Timeframe::FifteenMin) {
+        return;
+    }
+
     let previous = tops.insert(market.up_token_id.clone(), top);
 
     if previous != Some(top) {
-        if let Some(update) = MarketUpdate::from_top(market, top) {
-            let _ = broadcast_tx.send(update.into());
+        let snapshot = match quotes.write() {
+            Ok(mut latest) => {
+                latest.set(market, top);
+                *latest
+            }
+            Err(_) => return,
+        };
+        if market_is_live(market) {
+            let _ = broadcast_tx.send(ClientMessage::quotes_only(snapshot));
         }
     }
 }

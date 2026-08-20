@@ -11,9 +11,9 @@ use gamma::UpMarket;
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 use tokio::time::sleep;
-use update::{markets_changed, next_rotation_delay};
+use update::{markets_changed, next_rotation_delay, SharedQuotes};
 
-const BROADCAST_CAPACITY: usize = 16_384;
+const BROADCAST_CAPACITY: usize = 65_536;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,13 +29,15 @@ async fn main() -> Result<()> {
 
     let (market_tx, market_rx) = watch::channel(Vec::<UpMarket>::new());
     let (broadcast_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
+    let quotes = SharedQuotes::default();
 
     tokio::spawn(server::run_server(broadcast_tx.clone()));
     tokio::spawn(polymarket::run_polymarket_feed(
         market_rx,
         broadcast_tx.clone(),
+        quotes.clone(),
     ));
-    tokio::spawn(custom_feed::run_custom_feed(broadcast_tx));
+    tokio::spawn(custom_feed::run_custom_feed(broadcast_tx, quotes));
 
     run_market_rotation(client, market_tx).await
 }

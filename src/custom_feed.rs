@@ -1,4 +1,4 @@
-use crate::update::{parse_custom_payload, ClientMessage};
+use crate::update::{parse_custom_payload, ClientMessage, SharedQuotes};
 use crate::reconnect::Backoff;
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
@@ -18,7 +18,10 @@ pub fn load_custom_feed_addr() -> Result<String> {
     parse_addr(&contents).with_context(|| format!("invalid address in {}", path.display()))
 }
 
-pub async fn run_custom_feed(broadcast_tx: broadcast::Sender<ClientMessage>) -> Result<()> {
+pub async fn run_custom_feed(
+    broadcast_tx: broadcast::Sender<ClientMessage>,
+    quotes: SharedQuotes,
+) -> Result<()> {
     let mut backoff = Backoff::new();
 
     loop {
@@ -35,7 +38,7 @@ pub async fn run_custom_feed(broadcast_tx: broadcast::Sender<ClientMessage>) -> 
         let url = to_websocket_url(&addr);
         eprintln!("custom feed: connecting to {url}");
 
-        match stream_once(&url, &broadcast_tx).await {
+        match stream_once(&url, &broadcast_tx, &quotes).await {
             Ok(()) => {
                 eprintln!("custom feed: stream ended, reconnecting...");
                 backoff.reset();
@@ -49,7 +52,11 @@ pub async fn run_custom_feed(broadcast_tx: broadcast::Sender<ClientMessage>) -> 
     }
 }
 
-async fn stream_once(url: &str, broadcast_tx: &broadcast::Sender<ClientMessage>) -> Result<()> {
+async fn stream_once(
+    url: &str,
+    broadcast_tx: &broadcast::Sender<ClientMessage>,
+    quotes: &SharedQuotes,
+) -> Result<()> {
     let (ws, _) = connect_async(url)
         .await
         .with_context(|| format!("failed to connect to custom websocket at {url}"))?;
@@ -71,13 +78,11 @@ async fn stream_once(url: &str, broadcast_tx: &broadcast::Sender<ClientMessage>)
 
                 match msg.context("custom feed read failed")? {
                     Message::Text(text) => {
-                        let payload = parse_custom_payload(&text);
-                        let _ = broadcast_tx.send(ClientMessage::custom(payload));
+                        forward_custom(&text, quotes, broadcast_tx);
                     }
                     Message::Binary(data) => {
                         let text = String::from_utf8_lossy(&data);
-                        let payload = parse_custom_payload(&text);
-                        let _ = broadcast_tx.send(ClientMessage::custom(payload));
+                        forward_custom(&text, quotes, broadcast_tx);
                     }
                     Message::Ping(payload) => {
                         write.send(Message::Pong(payload)).await?;
@@ -91,6 +96,19 @@ async fn stream_once(url: &str, broadcast_tx: &broadcast::Sender<ClientMessage>)
             }
         }
     }
+}
+
+fn forward_custom(
+    text: &str,
+    quotes: &SharedQuotes,
+    broadcast_tx: &broadcast::Sender<ClientMessage>,
+) {
+    let payload = parse_custom_payload(text);
+    let latest = match quotes.read() {
+        Ok(guard) => *guard,
+        Err(err) => *err.into_inner(),
+    };
+    let _ = broadcast_tx.send(ClientMessage::custom(payload, latest));
 }
 
 fn ip_file_path() -> PathBuf {
