@@ -1,6 +1,7 @@
 mod custom_feed;
 mod gamma;
 mod orderbook;
+mod poly_latency;
 mod polymarket;
 mod reconnect;
 mod server;
@@ -37,7 +38,8 @@ async fn main() -> Result<()> {
         broadcast_tx.clone(),
         quotes.clone(),
     ));
-    tokio::spawn(custom_feed::run_custom_feed(broadcast_tx, quotes));
+    tokio::spawn(custom_feed::run_custom_feed(broadcast_tx.clone(), quotes));
+    tokio::spawn(poly_latency::run_poly_cancel_probe(broadcast_tx));
 
     run_market_rotation(client, market_tx).await
 }

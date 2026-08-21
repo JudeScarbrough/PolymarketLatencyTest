@@ -68,6 +68,7 @@ pub struct MarketMessage {
 pub struct LatencyMessage {
     pub timestamp: i64,
     pub latency: i64,
+    pub source: String,
 }
 
 impl ClientMessage {
@@ -92,10 +93,11 @@ impl ClientMessage {
         Self::from_quotes(quotes, Value::Object(serde_json::Map::new()))
     }
 
-    pub fn latency(sent_at_ms: i64, latency_ms: i64) -> Self {
+    pub fn latency(sent_at_ms: i64, latency_ms: i64, source: &str) -> Self {
         Self::Latency(LatencyMessage {
             timestamp: sent_at_ms.saturating_mul(1_000),
             latency: latency_ms,
+            source: source.to_string(),
         })
     }
 }
