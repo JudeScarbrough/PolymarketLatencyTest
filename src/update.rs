@@ -55,6 +55,8 @@ pub struct ClientMessage {
     pub five_min_starttime: Option<i64>,
     #[serde(rename = "15m_starttime")]
     pub fifteen_min_starttime: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency: Option<i64>,
 }
 
 impl ClientMessage {
@@ -68,6 +70,7 @@ impl ClientMessage {
             ask_15m: quotes.fifteen_min.ask,
             five_min_starttime: quotes.five_min_start,
             fifteen_min_starttime: quotes.fifteen_min_start,
+            latency: None,
         }
     }
 
@@ -77,6 +80,12 @@ impl ClientMessage {
 
     pub fn quotes_only(quotes: LatestQuotes) -> Self {
         Self::from_quotes(quotes, Value::Object(serde_json::Map::new()))
+    }
+
+    pub fn with_latency(quotes: LatestQuotes, latency_ms: i64) -> Self {
+        let mut message = Self::quotes_only(quotes);
+        message.latency = Some(latency_ms);
+        message
     }
 }
 
