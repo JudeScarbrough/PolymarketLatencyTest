@@ -118,8 +118,7 @@ fn handle_feed_text(
 ) {
     if let Some(sent_at_ms) = parse_pong(text) {
         let latency_ms = Utc::now().timestamp_millis() - sent_at_ms;
-        let latest = read_quotes(quotes);
-        let _ = broadcast_tx.send(ClientMessage::with_latency(latest, latency_ms));
+        let _ = broadcast_tx.send(ClientMessage::latency(sent_at_ms, latency_ms));
         return;
     }
     forward_custom(text, quotes, broadcast_tx);

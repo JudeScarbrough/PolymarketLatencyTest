@@ -44,7 +44,14 @@ impl LatestQuotes {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ClientMessage {
+#[serde(untagged)]
+pub enum ClientMessage {
+    Market(MarketMessage),
+    Latency(LatencyMessage),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MarketMessage {
     pub timestamp: i64,
     pub payload: Value,
     pub bid_5m: Option<f64>,
@@ -55,13 +62,17 @@ pub struct ClientMessage {
     pub five_min_starttime: Option<i64>,
     #[serde(rename = "15m_starttime")]
     pub fifteen_min_starttime: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub latency: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LatencyMessage {
+    pub timestamp: i64,
+    pub latency: i64,
 }
 
 impl ClientMessage {
     pub fn from_quotes(quotes: LatestQuotes, payload: Value) -> Self {
-        Self {
+        Self::Market(MarketMessage {
             timestamp: to_unix_micros(Utc::now()),
             payload,
             bid_5m: quotes.five_min.bid,
@@ -70,8 +81,7 @@ impl ClientMessage {
             ask_15m: quotes.fifteen_min.ask,
             five_min_starttime: quotes.five_min_start,
             fifteen_min_starttime: quotes.fifteen_min_start,
-            latency: None,
-        }
+        })
     }
 
     pub fn custom(payload: Value, quotes: LatestQuotes) -> Self {
@@ -82,10 +92,11 @@ impl ClientMessage {
         Self::from_quotes(quotes, Value::Object(serde_json::Map::new()))
     }
 
-    pub fn with_latency(quotes: LatestQuotes, latency_ms: i64) -> Self {
-        let mut message = Self::quotes_only(quotes);
-        message.latency = Some(latency_ms);
-        message
+    pub fn latency(sent_at_ms: i64, latency_ms: i64) -> Self {
+        Self::Latency(LatencyMessage {
+            timestamp: sent_at_ms.saturating_mul(1_000),
+            latency: latency_ms,
+        })
     }
 }
 
